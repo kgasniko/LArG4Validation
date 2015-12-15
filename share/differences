@@ -1,0 +1,160 @@
+Index: LArG4ValidationPlotter.py
+===================================================================
+--- LArG4ValidationPlotter.py	(revision 698958)
++++ LArG4ValidationPlotter.py	(working copy)
+@@ -75,7 +75,7 @@
+ split_canv = options.split_canvas.split(":")
+ split_canv = map(int,split_canv)
+ 
+-from LArG4Validation.LArG4PlottingScript import *
++from LArG4PlottingScript import *
+ 
+ if (len(split_canv) != 2) :
+ 	print "ERROR: wrong split parameter"
+Index: LArG4ValidationGenerate.py
+===================================================================
+--- LArG4ValidationGenerate.py	(revision 698958)
++++ LArG4ValidationGenerate.py	(working copy)
+@@ -6,9 +6,10 @@
+ #parser.add_option("--cpuNumber", dest="cpu",         default='00',                       help="select the desired CPU")
+ parser.add_option("--inputFile",  dest="input",       default=None,                       help="select the input benevent file name (preferred over the particle gun)")
+ parser.add_option("--outputFile", dest="output",      default='sp',                       help="select the output file name prefix (default: %default)")
+-parser.add_option("--geometry",   dest="geometry",    default='',                         help="select the geometry tag (leave empty for auto)")
+-parser.add_option("--condition",  dest="condition",   default='',                         help="select the condition tag (REQUIRED)")
+-parser.add_option("--physlist",   dest="physlist",    default='',                         help="select the physics list (leave empty for auto)")
++parser.add_option("--geometryVersion",   dest="geometry",    default='',                         help="select the geometry tag (leave empty for auto)")
++parser.add_option("--conditionsTag",  dest="condition",   default='',                         help="select the condition tag (REQUIRED)")
++parser.add_option("--physicsLis",   dest="physlist",    default='',                         help="select the physics list (leave empty for auto)")
++parser.add_option("--runNumber",  dest="runNumber",   default=0,              type=int,   help="run number (default: %default)")
+ parser.add_option("--etaMin",     dest="etaMin",      default='-5.5',                     help="particle gun: Minimum Eta (default: %default)")
+ parser.add_option("--etaMax",     dest="etaMax",      default='5.5',                      help="particle gun: Maximum Eta (default: %default)")
+ parser.add_option("--energyMin",  dest="energyMin",   default='20000',                    help="particle gun: particle Minimum energy (default: %default MeV)")
+@@ -16,7 +17,7 @@
+ parser.add_option("--pid",        dest="pid",         default='11',                       help="particle gun: particle type (11=electron, 13=muon, 111=pi0 211=pi+, .., default: %default)")
+ parser.add_option("--parameterize",dest="parameterize", default=0,            type=int,   help="parameteriziation level (0=off, default: %default)")
+ parser.add_option("--nevents",    dest="nevents",     default=-1,             type=int,   help="number of events to generate (default: all)")
+-parser.add_option("--runNumber",  dest="runNumber",   default=0,              type=int,   help="run number (default: %default)")
++parser.add_option("--configFile", dest="configFileName", default='',   help="name of file with configuration (default: none)");
+ parser.add_option("--FSLib",      dest="fsLibs",      default=[],      action="append",   help="path to the frozen shower libraries (separate flag for each library must be used)")
+ (options, args) = parser.parse_args()
+ 
+@@ -73,21 +74,24 @@
+ if options.input is not None:
+     athenaCommonFlags.PoolEvgenInput=[options.input]
+ else:
+-    ## Use single particle generator
+-    import AthenaCommon.AtlasUnixGeneratorJob
+-    spgorders = ['pdgcode: constant '+options.pid,
+-                 'vertX: constant 0.0',
+-                 'vertY: constant 0.0',
+-                 'vertZ: constant 0.0',
+-                 't: constant 0.0',
+-                 'eta: flat ' + options.etaMin + ' ' + options.etaMax,
+-                 'phi: flat 0 6.28318',
+-                 'e: flat ' + options.energyMin + ' ' + options.energyMax]
++        ## Use single particle gun
++        import AthenaCommon.AtlasUnixGeneratorJob
++        import ParticleGun as PG
++        topSequence += ParticleGun()
++        topSequence.ParticleGun.sampler.pid = (pid)
++        if options.configFileName is not "" :
++            energy={}
++            inputfile=open(options.ConfigFileName);
++            for line in inputfile:
++                for v in line.split():
++                    data.append(int(v))
++            energyBins=set(data);   
++            topSequence.ParticleGun.sampler.mom = PG.EEtaMPhiSampler(energy=energyBins, eta=[3.8, 4.8])
++        else:
++            topSequence.ParticleGun.sampler.mom = PG.EEtaMPhiSampler(energy=[energyMin, energyMax], eta=[3.8, 4.8])
++        evgenConfig.generators += ["ParticleGun"]
++        athenaCommonFlags.PoolEvgenInput.set_Off()
+ 
+-    athenaCommonFlags.PoolEvgenInput.set_Off()
+-    from ParticleGenerator.ParticleGeneratorConf import ParticleGenerator
+-    topSequence += ParticleGenerator()
+-    topSequence.ParticleGenerator.orders = sorted(spgorders)
+ 
+ if (options.parameterize > 0): 
+     SimFlags.LArParameterization=options.parameterize
+@@ -99,7 +103,7 @@
+              ServiceMgr += LArG4ShowerLibSvc()
+         ServiceMgr.LArG4ShowerLibSvc.FileNameList = options.fsLibs
+     
+-	
++    
+ ## Set Event #
+ SimFlags.RunNumber = options.runNumber
+ 
+Index: AODElectronContainerReader.py
+===================================================================
+--- AODElectronContainerReader.py	(revision 698958)
++++ AODElectronContainerReader.py	(working copy)
+@@ -12,6 +12,7 @@
+ 
+ from sys import exit
+ from os.path import isfile
++from os import system 
+ 
+ from optparse import OptionParser
+ parser = OptionParser(usage = "usage: %prog [options] input1 [...]", version="%prog v0.0.1 $Id: AODElectronContainerReader.py,v 0.1 2010-11-10 13:00:12 Morse Exp $")
+@@ -25,13 +26,18 @@
+ 		print "ERROR: wrong input: nonexistent file:",arg
+ 		exit(1)
+ 
++theApp.HistogramPersistency = "ROOT"
++
+ from AthenaCommon.AppMgr import ServiceMgr
+ from AthenaCommon.AlgSequence import AlgSequence
++from AthenaCommon import CfgMgr
+ topSequence = AlgSequence()
+ 
+ 
+ from LArG4Validation.LArG4ValidationConf import AODReader
+-topSequence += AODReader()
++readerFS = AODReader()
++readerFS.makeHist = True
++topSequence += readerFS
+ 
+ topSequence.AODReader.OutputLevel = WARNING
+ 
+@@ -45,7 +51,12 @@
+ ServiceMgr.EventSelector.InputCollections = args
+ ServiceMgr.EventSelector.BackNavigation = False
+ 
++
+ theApp.Dlls += [ 'RootHistCnv' ]
+ theApp.HistogramPersistency = 'ROOT'
++if not hasattr(svcMgr, 'THistSvc'):
++	svcMgr += CfgMgr.THistSvc()
++hsvc = svcMgr.THistSvc
++hsvc.Output += [ "stat DATAFILE=\'"+options.output+"\' OPT='RECREATE'" ]
+ NTupleSvc = Service( "NTupleSvc" )
+-NTupleSvc.Output = [ "FILE DATAFILE=\'"+options.output+"\'  TYP='ROOT'  OPT='NEW'" ]
++NTupleSvc.Output = [ "stat DATAFILE=\'"+options.output+"\' OPT='NEW'" ]
+Index: PlotsInputExample
+===================================================================
+--- PlotsInputExample	(revision 698958)
++++ PlotsInputExample	(working copy)
+@@ -60,8 +60,8 @@
+ ######################################
+ 
+ #example
+-#restrict egen ..50 #global restriction on on energy
+-#prof egen erecegen 0 0 50 0 Erec/Egen vs Egen (EMB) #plot the profile with auto borders, 100 bins, in linear scale
++restrict egen ..100 #global restriction on on energy
++prof egen erecegen 0 0 50 0 Erec/Egen vs Egen (EMB) #plot the profile with auto borders, 100 bins, in linear scale
+ #restrict eta -1.5..1.5 #personal restrict for this plot - only in EMB area
+ #prof egen erecegen 0 0 50 0 Erec/Egen vs Egen (EMEC) #same profile
+ #restrict eta 1.5.. ..-1.5 #restrict of eta. only eta less then -1.5 or more then 1.5 is allowed
+Index: FilesInputExample
+===================================================================
+--- FilesInputExample	(revision 698958)
++++ FilesInputExample	(working copy)
+@@ -3,4 +3,4 @@
+ #file FULL_OLDDB_15062011.gen.tuple.root		7 1 0 0.6 Some Other File. #Light blue, total filling
+ #file FS_OLDDB_GAP0.22_15062011.gen.tuple.root	6 1 20 0.6 Some totally other file. #Violet, thin, markers are filled circles
+ #file FS_NEWGAP_NEWCOND_03062011.gen.tuple.root	2 2 1 0.6 And yet another file. #Thick red line without markers.
+-#restrict phi 0..1.57
+\ No newline at end of file
++#restrict phi 0..1.57
